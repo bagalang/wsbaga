@@ -82,3 +82,7 @@ hash — RFC 3174 vectors + the RFC 6455 accept-key vector).
   no server-side origin/protocol-version enforcement beyond key presence.
 - SHA-1 is used **only** because RFC 6455 mandates it; everything else in
   the stack stays on sha256/hmac.
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 Dim Gigov.
