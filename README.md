@@ -1,5 +1,22 @@
 # wsbaga
 
+
+This repository is the package. The compiler and `std` stay in the baga
+language monorepo. Check this tree out as `app-product/wsbaga` there
+(git submodule) so path deps and `-I app-product` keep working.
+
+## Checkout
+
+Inside a baga language clone:
+
+```bash
+git submodule update --init --recursive
+# or, first time from a fresh baga tree without the submodule recorded:
+git clone git@github.com:bagalang/wsbaga.git app-product/wsbaga
+```
+
+`sandak.toml` keeps path deps so shared packages stay in baga.
+`chatbaga` still depends on `../wsbaga`. `tests/ws_test.baga` stays in baga.
 A **WebSocket (RFC 6455)** implementation for Baga — handshake, frame codec,
 echo server, and a masked client. Apps-roadmap №3: the probe that added
 **SHA-1 to std/crypto** and proved the framing against a real-world client.
