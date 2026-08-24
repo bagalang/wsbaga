@@ -40,9 +40,12 @@ echo server, and a masked client. Apps-roadmap №3: the probe that added
 fn ws_accept_key(client_key: str) -> str
 fn ws_build_frame(fin, opcode, payload: bytes, mask_key) -> bytes
 fn ws_apply_mask(payload, mask: bytes) -> bytes
+fn ws_close_payload(code, reason) -> bytes
+fn ws_close_code(payload) -> i64     // 0 if shorter than 2 bytes
+fn ws_close_reason(payload) -> str
 
 // server (effects)
-fn ws_server_handshake(fd) -> i64 !IO !Net
+fn ws_server_handshake(fd) -> i64 !IO !Net   // GET + Upgrade + Connection + version 13
 fn ws_read_frame(conn: WsConn) -> WsRead !IO !Net       // frame level
 fn ws_read_message(conn: WsConn) -> WsRead !IO !Net     // message level (W2)
 fn ws_handle_conn(fd) -> i64 !IO !Net !Random
@@ -51,6 +54,7 @@ fn ws_serve(port) -> i64 !Net !IO !Random !Par
 // client (effects)
 fn ws_client_connect(host, port, timeout_s) -> WsDial !Net !IO !Random
 fn ws_send_text / ws_send_binary / ws_send_ping / ws_send_close   // masked
+fn ws_send_close_code(fd, code, reason)                          // masked
 
 struct WsConn  { fd, buf, frag_op, frag }  // buffered conn + fragment accumulator
 struct WsFrame { fin, opcode, payload: bytes }
@@ -78,8 +82,13 @@ hash — RFC 3174 vectors + the RFC 6455 accept-key vector).
 - **Fragmented messages are reassembled** by `ws_read_message` (W2 closed
   2026-08-04); control frames interleave mid-message per RFC 6455 §5.4.
   `ws_read_frame` remains the frame-level API.
-- No `permessage-deflate`, no close-status interpretation (payload echoed),
-  no server-side origin/protocol-version enforcement beyond key presence.
+- Handshake requires `Connection: Upgrade` and `Sec-WebSocket-Version: 13`.
+  Parser rejects RSV bits, reserved opcodes, fragmented/oversized control
+  frames, and non-minimal length encodings.
+- Close code/reason helpers (`ws_close_*`, `ws_send_close_code`); the echo
+  server still reflects the close payload as-is.
+- No `permessage-deflate`, no origin check. Handshake 101 / client GET use
+  `bufbaga`. `WSPORT` is clamped to 1..65535.
 - SHA-1 is used **only** because RFC 6455 mandates it; everything else in
   the stack stays on sha256/hmac.
 

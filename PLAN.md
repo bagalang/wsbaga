@@ -1,7 +1,7 @@
 # wsbaga — WebSocket (plan)
 
-Date: 2026-08-04
-Status: P0 done (RFC 6455 core, interop-verified); P1 chat done in chatbaga
+Date: 2026-08-24
+Status: P0 done; P1 chat done in chatbaga; P2 partial (0.2.0)
 Goal: the roadmap №3 probe — real-time transport. What the probe found:
 std needed **SHA-1** (added), and the concurrency model (K1) was the wall
 between "echo" and "chat" — closed by `std/net/poll` + `app-product/chatbaga`.
@@ -23,11 +23,14 @@ between "echo" and "chat" — closed by `std/net/poll` + `app-product/chatbaga`.
 - Rooms + broadcast: `chatbaga` (`Map` fd→room/name/bufs, JSON envelope).
 - See `app-product/chatbaga/{README,PLAN,gaps}.md`.
 
-### P2 — completeness
+### P2 — completeness (partial in 0.2.0)
 
-- Fragmented message reassembly (W2).
+- Fragmented message reassembly (W2). **Shipped.**
+- Close status/reason (`ws_close_code` / `ws_send_close_code`). **Shipped.**
+- Handshake fail-closed: version 13 + `Connection: Upgrade`; RSV /
+  reserved opcodes / control-frame rules / minimal length encoding.
 - permessage-deflate (needs a deflate implementation first — big).
-- Close status handling, heartbeat (idle ping) policy.
+- Heartbeat (idle ping) policy.
 - TLS — shares the std/net blocker (pgbaga G6).
 
 ## Non-goals (P0)

@@ -1,8 +1,9 @@
 [package]
 name = "wsbaga"
-version = "0.1.0"
+version = "0.2.0"
 entry = "ws.baga"
 
 [dependencies]
 httpdbaga = { path = "../httpdbaga" }
 std = { path = "../../std" }
+bufbaga = { path = "../bufbaga" }

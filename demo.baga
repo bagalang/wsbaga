@@ -10,7 +10,10 @@ fn main() -> i64 !Net !IO !Par !Random {
     let port_s = env("WSPORT")?
     let mut port: i64 = 16441
     if port_s != "" {
-        port = parse_int(port_s)
+        let p = parse_int(port_s)
+        if p >= 1 && p <= 65535 {
+            port = p
+        }
     }
     print(concat("wsbaga echo server listening on ws://127.0.0.1:", int_to_str(port)))
     return ws_serve(port)?

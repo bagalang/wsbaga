@@ -34,6 +34,14 @@ needs HMAC-SHA1, so it wasn't added.
 
 **Verdict.** Add when needed — `hmac_sha256` is the template.
 
+## W4 — close status / RFC handshake strictness — **closed 2026-08-24**
+
+**Shipped.** `ws_close_code` / `ws_close_reason` / `ws_close_payload` /
+`ws_send_close_code`. Handshake requires `Connection: Upgrade` and
+`Sec-WebSocket-Version: 13`. `ws_try_parse_frame` rejects RSV ≠ 0,
+reserved opcodes, fragmented or >125-byte control frames, 64-bit length
+with MSB set, and non-minimal 126/127 encodings.
+
 ## Closed / fine
 
 - **SHA-1 in std** (the gap this app was built around): `std/crypto/sha1.baga`,
@@ -41,3 +49,4 @@ needs HMAC-SHA1, so it wasn't added.
 - Frame codec over the `bytes` API is clean; masking is one XOR pass.
 - Handshake parse reused httpdbaga (`http_read_request`) — no duplication.
 - Real interop: `wscat` (Node.js) echoes UTF-8 text and 900-byte payloads.
+- 101 / client GET built with `bufbaga` (G1).
