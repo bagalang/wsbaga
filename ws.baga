@@ -1,10 +1,11 @@
 // ws.baga — WebSocket (RFC 6455) for Baga: handshake + frame codec + echo server.
+// Client helpers (ws_client_connect / ws_send_*) live in ws_client.baga.
 //
 // Layering (same probe model as kvbaga/pgbaga):
 //   ws_serve / ws_handle_conn          — effectful socket loop (!Net !IO !Random)
 //   ws_read_frame / ws_build_frame     — frame codec over a buffered conn
 //   ws_server_handshake / ws_accept_key — HTTP upgrade (httpdbaga + std/crypto sha1)
-//   client helpers                     — ws_client_connect / ws_send_* (masked frames)
+//   ws_client.baga                     — dial + masked frames + close helpers
 //
 // Honest limits (gaps.md): serial connections (K1 model), no
 // permessage-deflate. Close status/reason helpers exist; the echo server
@@ -503,67 +504,6 @@ fn ws_serve(port: i64) -> i64 !Net !IO !Random !Par {
     return 0
 }
 
-// ---------- client (tests / demo) ----------
-
-struct WsDial {
-    ok: i64,
-    conn: WsConn
-}
-
-// Connect + upgrade. Verifies the server's Sec-WebSocket-Accept.
-fn ws_client_connect(host: str, port: i64, timeout_s: i64) -> WsDial !Net !IO !Random {
-    let bad = WsDial { ok: 0, conn: ws_conn(-1) }
-    let fd = tcp_connect_to(host, port, timeout_s)?
-    if fd < 0 {
-        return bad
-    }
-    let key = base64_encode(random_bytes(16)?)
-    let mut reqb = buf_from("GET /ws HTTP/1.1\r\nHost: ")
-    reqb = buf_push(reqb, host)
-    reqb = buf_push_chr(reqb, 58)
-    reqb = buf_push_i64(reqb, port)
-    reqb = buf_push(reqb, "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ")
-    reqb = buf_push(reqb, key)
-    reqb = buf_push(reqb, "\r\nSec-WebSocket-Version: 13\r\n\r\n")
-    let req = buf_str(reqb)
-    let w = tcp_write_bytes(fd, bytes_of_str(req))?
-    if w != 0 {
-        tcp_close(fd)?
-        return bad
-    }
-    // read until the header/body separator
-    let mut buf = ws_empty()
-    let mut split: i64 = -1
-    let mut tries: i64 = 0
-    while split < 0 && tries < 256 {
-        let chunk = tcp_read_bytes(fd, 4096)?
-        if bytes_len(chunk) == 0 {
-            tcp_close(fd)?
-            return bad
-        }
-        buf = bytes_concat(buf, chunk)
-        let sep = bytes_of_str("\r\n\r\n")
-        split = ws_find_sub(buf, sep)
-        tries = tries + 1
-    }
-    if split < 0 {
-        tcp_close(fd)?
-        return bad
-    }
-    let head = str_of_bytes(bytes_slice(buf, 0, split))
-    if str_find(head, "101") < 0 {
-        tcp_close(fd)?
-        return bad
-    }
-    let expect = ws_accept_key(key)
-    if str_find(to_lower(head), to_lower(expect)) < 0 {
-        tcp_close(fd)?
-        return bad
-    }
-    let leftover = bytes_slice(buf, split + 4, bytes_len(buf))
-    return WsDial { ok: 1, conn: WsConn { fd: fd, buf: leftover, frag_op: 0, frag: ws_empty() } }
-}
-
 // Index of needle in hay; -1 if absent.
 fn ws_find_sub(hay: bytes, needle: bytes) -> i64 {
     let hn = bytes_len(hay)
@@ -589,62 +529,4 @@ fn ws_find_sub(hay: bytes, needle: bytes) -> i64 {
         i = i + 1
     }
     return -1
-}
-
-// Masked client send (RFC requires client masking).
-fn ws_send_frame(fd: i64, opcode: i64, payload: bytes) -> i64 !Net !IO !Random {
-    let mv = random_bytes(4)?
-    let mask_key = (vec_get(mv, 0) << 24) | (vec_get(mv, 1) << 16) | (vec_get(mv, 2) << 8) | vec_get(mv, 3)
-    if mask_key == 0 {
-        // never send an all-zero key (RFC §5.3); flip a bit
-        return tcp_write_bytes(fd, ws_build_frame(1, opcode, payload, 1))?
-    }
-    return tcp_write_bytes(fd, ws_build_frame(1, opcode, payload, mask_key))?
-}
-
-fn ws_send_text(fd: i64, s: str) -> i64 !Net !IO !Random {
-    return ws_send_frame(fd, WS_TEXT(), bytes_of_str(s))?
-}
-
-fn ws_send_binary(fd: i64, b: bytes) -> i64 !Net !IO !Random {
-    return ws_send_frame(fd, WS_BINARY(), b)?
-}
-
-fn ws_send_ping(fd: i64, payload: bytes) -> i64 !Net !IO !Random {
-    return ws_send_frame(fd, WS_PING(), payload)?
-}
-
-fn ws_close_payload(code: i64, reason: str) -> bytes {
-    let v: Vec<i64> = vec_new()
-    vec_push(v, (code >> 8) & 255)
-    vec_push(v, code & 255)
-    let rb = bytes_of_str(reason)
-    let mut i: i64 = 0
-    while i < bytes_len(rb) {
-        vec_push(v, bytes_at(rb, i))
-        i = i + 1
-    }
-    return bytes_from_vec(v)
-}
-
-fn ws_close_code(payload: bytes) -> i64 {
-    if bytes_len(payload) < 2 {
-        return 0
-    }
-    return ((bytes_at(payload, 0) & 255) << 8) | (bytes_at(payload, 1) & 255)
-}
-
-fn ws_close_reason(payload: bytes) -> str {
-    if bytes_len(payload) <= 2 {
-        return ""
-    }
-    return str_of_bytes(bytes_slice(payload, 2, bytes_len(payload)))
-}
-
-fn ws_send_close(fd: i64) -> i64 !Net !IO !Random {
-    return ws_send_frame(fd, WS_CLOSE(), ws_empty())?
-}
-
-fn ws_send_close_code(fd: i64, code: i64, reason: str) -> i64 !Net !IO !Random {
-    return ws_send_frame(fd, WS_CLOSE(), ws_close_payload(code, reason))?
 }

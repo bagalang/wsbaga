@@ -51,10 +51,13 @@ fn ws_read_message(conn: WsConn) -> WsRead !IO !Net     // message level (W2)
 fn ws_handle_conn(fd) -> i64 !IO !Net !Random
 fn ws_serve(port) -> i64 !Net !IO !Random !Par
 
-// client (effects)
+// client (effects) — in ws_client.baga
 fn ws_client_connect(host, port, timeout_s) -> WsDial !Net !IO !Random
 fn ws_send_text / ws_send_binary / ws_send_ping / ws_send_close   // masked
 fn ws_send_close_code(fd, code, reason)                          // masked
+
+// Layout: ws.baga (handshake, codec, server) + ws_client.baga (dial, masked
+// sends, close helpers) — the split keeps both files under the 600-line gate.
 
 struct WsConn  { fd, buf, frag_op, frag }  // buffered conn + fragment accumulator
 struct WsFrame { fin, opcode, payload: bytes }
