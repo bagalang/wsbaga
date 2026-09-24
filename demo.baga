@@ -3,6 +3,7 @@
 //   wscat -c ws://127.0.0.1:16441                # or any RFC 6455 client
 
 import "ws.baga"
+import "ws_server.baga"
 import "std/os/os.baga"
 import "std/str/str.baga"
 

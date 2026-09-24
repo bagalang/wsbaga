@@ -30,7 +30,7 @@ echo server, and a masked client. Apps-roadmap №3: the probe that added
 | Frames | FIN/opcode, 7/16/64-bit lengths, client masking (RFC §5.3) |
 | Opcodes | text (1), binary (2), close (8), ping→pong (9→10); pong ignored |
 | Binary safety | payloads ride on `bytes` — NUL/0xFF round-trip (unlike `str` stores) |
-| Echo server | `ws_serve(port)` — serial accept loop (`go_bg`-ready) |
+| Echo server | `ws_serve(port)` in `ws_server.baga` — serial accept loop (`go_bg`-ready) |
 | Interop | verified against `wscat` (Node.js): UTF-8 text + 900-byte payloads |
 
 ## API
@@ -56,7 +56,7 @@ fn ws_client_connect(host, port, timeout_s) -> WsDial !Net !IO !Random
 fn ws_send_text / ws_send_binary / ws_send_ping / ws_send_close   // masked
 fn ws_send_close_code(fd, code, reason)                          // masked
 
-// Layout: ws.baga (handshake, codec, server) + ws_client.baga (dial, masked
+// Layout: ws.baga (handshake, codec) + ws_server.baga (echo) + ws_client.baga (dial, masked
 // sends, close helpers) — the split keeps both files under the 600-line gate.
 
 struct WsConn  { fd, buf, frag_op, frag }  // buffered conn + fragment accumulator

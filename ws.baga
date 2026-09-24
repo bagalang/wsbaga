@@ -1,8 +1,9 @@
-// ws.baga — WebSocket (RFC 6455) for Baga: handshake + frame codec + echo server.
+// ws.baga — WebSocket (RFC 6455) for Baga: handshake + frame codec.
+// The echo server (ws_serve) lives in ws_server.baga (600-line gate).
 // Client helpers (ws_client_connect / ws_send_*) live in ws_client.baga.
 //
 // Layering (same probe model as kvbaga/pgbaga):
-//   ws_serve / ws_handle_conn          — effectful socket loop (!Net !IO !Random)
+//   ws_server.baga                     — serial echo accept loop
 //   ws_read_frame / ws_build_frame     — frame codec over a buffered conn
 //   ws_server_handshake / ws_accept_key — HTTP upgrade (httpdbaga + std/crypto sha1)
 //   ws_client.baga                     — dial + masked frames + close helpers
@@ -342,26 +343,106 @@ struct WsHandshakeParse {
     ok: i64,        // 1 = upgrade request complete, response ready
     bad: i64,       // 1 = not a valid upgrade request (close the connection)
     response: str,  // the 101 text to send
-    consumed: i64   // header section length incl. \r\n\r\n
+    consumed: i64,  // header section length incl. \r\n\r\n
+    target: str,    // request-target of the GET line (e.g. "/ws?token=abc")
+    head: str       // raw header section (no trailing CRLFCRLF), for app headers
+}
+
+// „няма напредък" отговор — едно място, което строи този struct изцяло, за
+// да не се разминават литералите при ново поле. Ползва се и от парсера, и
+// от event loop-а (secp/ws_gateway.baga), който чака още байтове.
+fn ws_hs_none() -> WsHandshakeParse {
+    return WsHandshakeParse { ok: 0, bad: 0, response: "", consumed: 0, target: "", head: "" }
+}
+
+fn ws_hs_bad() -> WsHandshakeParse {
+    return WsHandshakeParse { ok: 0, bad: 1, response: "", consumed: 0, target: "", head: "" }
+}
+
+// Пътят от request-target-а: "/ws?a=1" → "/ws"; "" при невалиден вход.
+// Нужно на gateway-а, за да разбере дали upgrade-ът е за НЕГОВИЯ път (/ws),
+// а не за друг handler на същия порт — иначе /v1/... би отворил канал.
+fn ws_target_path(target: str) -> str {
+    if target == "" {
+        return ""
+    }
+    let q = str_find(target, "?")
+    if q < 0 {
+        return target
+    }
+    return substr(target, 0, q)
+}
+
+// Стойност на заявков параметър от request-target-а ("" при липса). Тук, а
+// не в gateway-а, за да е до парсването на target-а: двете не бива да се
+// разминават кое е „път" и кое „параметър".
+//
+// ВНИМАНИЕ: стойността НЕ се URL-декодира — `+` остава `+`. JWT-тата са
+// base64url (без `+`), значи за нашия случай е достатъчно; ако някога тук
+// дойде потребителски низ, трябва декодиране.
+fn ws_target_query(target: str, name: str) -> str {
+    let q = str_find(target, "?")
+    if q < 0 {
+        return ""
+    }
+    let parts: Vec<str> = str_split(substr(target, q + 1, len(target)), "&")
+    let mut i: i64 = 0
+    while i < vec_len(parts) {
+        let kv = vec_get(parts, i)
+        let eq = str_find(kv, "=")
+        if eq > 0 && substr(kv, 0, eq) == name {
+            return substr(kv, eq + 1, len(kv))
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Заглавна стойност от суровата header секция ("" при липса). Header-ите са
+// разделени с CRLF; сравнението по име е без регистър (HTTP). Нужно е за
+// upgrade, който НЕ минава през httpdbaga (event loop чете сурови байтове):
+// браузърът не може да сложи `Authorization` на WebSocket, затова токенът
+// идва в `Cookie`.
+fn ws_head_header(head: str, name: str) -> str {
+    if head == "" || name == "" {
+        return ""
+    }
+    let lines: Vec<str> = str_split(str_replace(head, "\r\n", "\n"), "\n")
+    let want = to_lower(name)
+    let mut i: i64 = 0
+    while i < vec_len(lines) {
+        let line = vec_get(lines, i)
+        let c = str_find(line, ":")
+        if c > 0 && to_lower(str_trim(substr(line, 0, c))) == want {
+            return str_trim(substr(line, c + 1, len(line)))
+        }
+        i = i + 1
+    }
+    return ""
 }
 
 fn ws_parse_handshake_buf(buf: bytes) -> WsHandshakeParse {
-    let no = WsHandshakeParse { ok: 0, bad: 0, response: "", consumed: 0 }
     let sep = ws_find_sub(buf, bytes_of_str("\r\n\r\n"))
     if sep < 0 {
         if bytes_len(buf) > 8192 {
-            return WsHandshakeParse { ok: 0, bad: 1, response: "", consumed: 0 }
+            return ws_hs_bad()
         }
-        return no
+        return ws_hs_none()
     }
     let head = str_of_bytes(bytes_slice(buf, 0, sep))
     // str_split cuts on the FIRST delimiter char only — normalize CRLF → LF
     let lines: Vec<str> = str_split(str_replace(head, "\r\n", "\n"), "\n")
     if vec_len(lines) == 0 {
-        return WsHandshakeParse { ok: 0, bad: 1, response: "", consumed: 0 }
+        return ws_hs_bad()
     }
     if !str_starts_with(vec_get(lines, 0), "GET ") {
-        return WsHandshakeParse { ok: 0, bad: 1, response: "", consumed: 0 }
+        return ws_hs_bad()
+    }
+    // request-target: вторият токен на GET реда ("/ws?a=1").
+    let req_parts: Vec<str> = str_split(vec_get(lines, 0), " ")
+    let mut target = ""
+    if vec_len(req_parts) >= 2 {
+        target = vec_get(req_parts, 1)
     }
     let mut key = ""
     let mut upgrade_ok: i64 = 0
@@ -388,13 +469,15 @@ fn ws_parse_handshake_buf(buf: bytes) -> WsHandshakeParse {
         i = i + 1
     }
     if upgrade_ok == 0 || conn_ok == 0 || ver_ok == 0 || key == "" {
-        return WsHandshakeParse { ok: 0, bad: 1, response: "", consumed: 0 }
+        return ws_hs_bad()
     }
     return WsHandshakeParse {
         ok: 1,
         bad: 0,
         response: ws_upgrade_response(key),
-        consumed: sep + 4
+        consumed: sep + 4,
+        target: target,
+        head: head
     }
 }
 
@@ -444,64 +527,6 @@ fn ws_build_frame(fin: i64, opcode: i64, payload: bytes, mask_key: i64) -> bytes
         out = bytes_concat(out, payload)
     }
     return out
-}
-
-// ---------- echo server ----------
-
-fn ws_handle_conn(fd: i64) -> i64 !IO !Net !Random {
-    let hs = ws_server_handshake(fd)?
-    if hs == 0 {
-        tcp_close(fd)?
-        return 0
-    }
-    let mut conn = ws_conn(fd)
-    let mut running: i64 = 1
-    while running == 1 {
-        let r = ws_read_message(conn)?
-        conn = r.conn
-        if r.ok == 0 {
-            running = 0
-        } else {
-            if r.bad == 1 {
-                running = 0   // protocol violation
-            } else {
-                let op = r.frame.opcode
-                if op == WS_CLOSE() {
-                    let resp = ws_build_frame(1, WS_CLOSE(), r.frame.payload, 0)
-                    tcp_write_bytes(fd, resp)?
-                    running = 0
-                } else {
-                    if op == WS_PING() {
-                        let resp = ws_build_frame(1, WS_PONG(), r.frame.payload, 0)
-                        tcp_write_bytes(fd, resp)?
-                    } else {
-                        if op == WS_TEXT() || op == WS_BINARY() {
-                            let resp = ws_build_frame(1, op, r.frame.payload, 0)
-                            tcp_write_bytes(fd, resp)?
-                        }
-                        // PONG: ignore
-                    }
-                }
-            }
-        }
-    }
-    tcp_close(fd)?
-    return 0
-}
-
-// Serial accept loop (same honest model as kvbaga; event loop is the P1).
-fn ws_serve(port: i64) -> i64 !Net !IO !Random !Par {
-    let listener = tcp_listen(port)?
-    if listener < 0 {
-        return -1
-    }
-    while true {
-        let fd = tcp_accept(listener)?
-        if fd >= 0 {
-            ws_handle_conn(fd)?
-        }
-    }
-    return 0
 }
 
 // Index of needle in hay; -1 if absent.

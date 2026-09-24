@@ -1,0 +1,71 @@
+// ws_server.baga — референтният echo сървър на wsbaga (демо и интероп тест).
+//
+// Изнесено от ws.baga, защото той мина 600 реда (scripts/filesize-global.sh).
+// Разделението е по слой: ws.baga е кодекът + handshake-ът (чист/blocking),
+// ws_server.baga е СЕРИЕН accept цикъл върху него.
+//
+// ЗАЩО Е ТУК И НЕ В SECP: това е „работещ пример" на пакета — `demo.baga` и
+// интероп тестът го ползват. Продуктовият сървър на secp не е този: той
+// държи много връзки с poll(2) (system/ws_gateway_*.baga), защото сериен
+// accept на 200 отворени таба е 200 нишки. Моделът е същият като kvbaga.
+
+import "ws.baga"
+import "std/net/tcp.baga"
+
+// ---------- echo server ----------
+
+fn ws_handle_conn(fd: i64) -> i64 !IO !Net !Random {
+    let hs = ws_server_handshake(fd)?
+    if hs == 0 {
+        tcp_close(fd)?
+        return 0
+    }
+    let mut conn = ws_conn(fd)
+    let mut running: i64 = 1
+    while running == 1 {
+        let r = ws_read_message(conn)?
+        conn = r.conn
+        if r.ok == 0 {
+            running = 0
+        } else {
+            if r.bad == 1 {
+                running = 0   // protocol violation
+            } else {
+                let op = r.frame.opcode
+                if op == WS_CLOSE() {
+                    let resp = ws_build_frame(1, WS_CLOSE(), r.frame.payload, 0)
+                    tcp_write_bytes(fd, resp)?
+                    running = 0
+                } else {
+                    if op == WS_PING() {
+                        let resp = ws_build_frame(1, WS_PONG(), r.frame.payload, 0)
+                        tcp_write_bytes(fd, resp)?
+                    } else {
+                        if op == WS_TEXT() || op == WS_BINARY() {
+                            let resp = ws_build_frame(1, op, r.frame.payload, 0)
+                            tcp_write_bytes(fd, resp)?
+                        }
+                        // PONG: ignore
+                    }
+                }
+            }
+        }
+    }
+    tcp_close(fd)?
+    return 0
+}
+
+// Serial accept loop (same honest model as kvbaga; event loop is the P1).
+fn ws_serve(port: i64) -> i64 !Net !IO !Random !Par {
+    let listener = tcp_listen(port)?
+    if listener < 0 {
+        return -1
+    }
+    while true {
+        let fd = tcp_accept(listener)?
+        if fd >= 0 {
+            ws_handle_conn(fd)?
+        }
+    }
+    return 0
+}
